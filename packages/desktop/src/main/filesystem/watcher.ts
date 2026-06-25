@@ -6,7 +6,7 @@ import { exists } from 'common/filesystem'
 import { hasMarkdownExtension, checkPathExcludePattern } from 'common/filesystem/paths'
 import { getUniqueId } from '../utils'
 import { loadMarkdownFile } from '../filesystem/markdown'
-import { isLinux, isOsx } from '../config'
+import { isLinux, isOsx, isWindows } from '../config'
 import type { BrowserWindow } from 'electron'
 import type { LineEnding } from '@shared/types/files'
 import type Preference from '../preferences'
@@ -195,7 +195,10 @@ class Watcher {
   }
 
   watch(win: BrowserWindow, watchPath: string, type: WatchType = 'dir'): () => void {
-    const usePolling = isOsx ? true : this._preferences.getItem<boolean>('watcherUsePolling')
+    const isUncPath = isWindows && /^\\\\/.test(watchPath)
+    const usePolling = isOsx || isUncPath
+      ? true
+      : this._preferences.getItem<boolean>('watcherUsePolling')
 
     const id = getUniqueId()
 
