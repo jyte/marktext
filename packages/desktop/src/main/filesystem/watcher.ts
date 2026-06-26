@@ -1,6 +1,6 @@
 import path from 'path'
+import fs, { type Dirent } from 'fs'
 import fsPromises from 'fs/promises'
-import { type Dirent } from 'fs'
 import log from 'electron-log'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { exists } from 'common/filesystem'
@@ -223,6 +223,9 @@ class Watcher {
     // do not support ReadDirectoryChangesW or inotify.  We fall back to a manual
     // readdir-based poll loop — see UNC_POLL_INTERVAL for details.
     if (isWindows && /^[/\\]{2}/.test(watchPath)) {
+      if (type === 'file') {
+        return this._watchUncFile(win, watchPath)
+      }
       return this._startUncPolling(win, watchPath, type)
     }
 
@@ -407,6 +410,69 @@ class Watcher {
    * VS Code, Cypress, Angular CLI, and Vite — none of which can rely on the
    * OS-native watcher across those mount boundaries.
    */
+  private _watchUncFile(win: BrowserWindow, watchPath: string): () => void {
+    log.info('[Watcher] Starting UNC file polling for:', watchPath)
+
+    const id = getUniqueId()
+    let disposed = false
+
+    const handler = async (): Promise<void> => {
+      if (disposed) return
+
+      const isMarkdown = hasMarkdownExtension(watchPath)
+      if (isMarkdown) {
+        const { _preferences } = this
+        const eol = _preferences.getPreferredEol() as LineEnding
+        const {
+          autoGuessEncoding = true,
+          trimTrailingNewline = 2,
+          autoNormalizeLineEndings = false
+        } = _preferences.getAll()
+
+        // Simulate the same work chokidar would do on a "change" event.
+        try {
+          const [data, stats] = await Promise.all([
+            loadMarkdownFile(watchPath, eol, autoGuessEncoding, trimTrailingNewline, autoNormalizeLineEndings),
+            fsPromises.stat(watchPath)
+          ])
+          win.webContents.send('mt::update-file', {
+            type: 'change',
+            change: { pathname: watchPath, data, mtimeMs: stats.mtimeMs }
+          })
+        } catch {
+          // File may have been removed — send unlink.
+          win.webContents.send('mt::update-file', {
+            type: 'unlink',
+            change: { pathname: watchPath }
+          })
+        }
+      }
+    }
+
+    // Periodically stat the file — same as chokidar's polling path would do.
+    fs.watchFile(watchPath, { interval: UNC_POLL_INTERVAL }, () => {
+      handler().catch(err => log.error('[Watcher] UNC file poll error:', err))
+    })
+
+    const closeFn = (): void => {
+      disposed = true
+      fs.unwatchFile(watchPath)
+      if (this.watchers[id]) {
+        delete this.watchers[id]
+      }
+    }
+
+    this.watchers[id] = {
+      win,
+      watcher: { close: closeFn },
+      pathname: watchPath,
+      type: 'file',
+      close: closeFn
+    }
+
+    return closeFn
+  }
+
   private _startUncPolling(
     win: BrowserWindow,
     watchPath: string,
