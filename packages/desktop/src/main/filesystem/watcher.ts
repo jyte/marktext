@@ -226,10 +226,10 @@ class Watcher {
       /^[/\\]{2}/.test(watchPath) ||
       (() => {
         try {
-          fs.realpathSync(path.join(watchPath, '__marktext_watcher_probe__'))
+          fs.realpathSync.native(watchPath)
           return false
-        } catch (e: any) {
-          return e.code !== 'ENOENT'
+        } catch {
+          return true
         }
       })()
     )
