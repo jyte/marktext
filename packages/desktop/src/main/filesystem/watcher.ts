@@ -224,7 +224,14 @@ class Watcher {
     // readdir-based poll loop — see UNC_POLL_INTERVAL for details.
     const needsPolling = isWindows && (
       /^[/\\]{2}/.test(watchPath) ||
-      (() => { try { fs.realpathSync(watchPath); return false } catch { return true } })()
+      (() => {
+        try {
+          fs.realpathSync(path.join(watchPath, '__marktext_watcher_probe__'))
+          return false
+        } catch (e: any) {
+          return e.code !== 'ENOENT'
+        }
+      })()
     )
     if (needsPolling) {
       if (type === 'file') {
