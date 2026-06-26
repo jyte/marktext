@@ -202,7 +202,7 @@ class Watcher {
   }
 
   watch(win: BrowserWindow, watchPath: string, type: WatchType = 'dir'): () => void {
-    const isUncPath = isWindows && /^\\\\/.test(watchPath)
+    const isUncPath = isWindows && /^[/\\]{2}/.test(watchPath)
     const usePolling = isOsx || isUncPath
       ? true
       : this._preferences.getItem<boolean>('watcherUsePolling')
