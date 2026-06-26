@@ -510,11 +510,17 @@ class Watcher {
 
       const fullPath = path.join(dirPath, entry.name)
 
-      if (entry.isDirectory()) {
+      // On WSL2's 9P virtual filesystem the Dirent type flags returned by
+      // readdir({ withFileTypes: true }) can be unreliable — isDirectory()
+      // may incorrectly return true for regular files (microsoft/WSL#13105).
+      // We therefore use the file extension as the primary signal:
+      //   - markdown extension  → always a file, regardless of Dirent
+      //   - no markdown extension → only recurse if Dirent says directory
+      if (hasMarkdownExtension(entry.name)) {
+        results.set(fullPath, 'file')
+      } else if (entry.isDirectory()) {
         results.set(fullPath, 'dir')
         await this._scanUncDirectory(fullPath, results)
-      } else if (entry.isFile() && hasMarkdownExtension(entry.name)) {
-        results.set(fullPath, 'file')
       }
     }
   }
