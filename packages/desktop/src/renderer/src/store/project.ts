@@ -144,6 +144,7 @@ export const useProjectStore = defineStore('project', () => {
 
   function LISTEN_FOR_LOAD_PROJECT(): void {
     window.electron.ipcRenderer.on('mt::open-directory', (_e, pathname) => {
+      console.log('[Project] mt::open-directory received:', pathname)
       OPEN_PROJECT(String(pathname))
     })
   }
@@ -151,6 +152,7 @@ export const useProjectStore = defineStore('project', () => {
   function LISTEN_FOR_UPDATE_PROJECT(): void {
     window.electron.ipcRenderer.on('mt::update-object-tree', (_e, payload) => {
       const { type, change } = (payload as { type: string; change: TreeChange }) ?? {}
+      console.log('[Project] mt::update-object-tree received:', type, change?.pathname)
       if (!projectTree.value) {
         pendingTreeEvents.value.push({ type, change })
         return

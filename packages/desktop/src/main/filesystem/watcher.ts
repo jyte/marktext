@@ -47,7 +47,13 @@ const add = async(
   trimTrailingNewline: number,
   autoNormalizeLineEndings: boolean
 ): Promise<void> => {
-  const stats = await fsPromises.stat(pathname)
+  let stats
+  try {
+    stats = await fsPromises.stat(pathname)
+  } catch (e) {
+    log.error('[Watcher] stat failed, skipping file:', pathname, e)
+    return
+  }
   const birthTime = stats.birthtime
   const mtimeMs = stats.mtimeMs
   const isMarkdown = hasMarkdownExtension(pathname)
@@ -155,6 +161,7 @@ const change = async(
 
 const addDir = (win: BrowserWindow, pathname: string, type: WatchType): void => {
   if (type === 'file') return
+  log.info('[Watcher] addDir:', pathname)
 
   const directory = {
     pathname,
@@ -200,6 +207,7 @@ class Watcher {
       ? true
       : this._preferences.getItem<boolean>('watcherUsePolling')
 
+    log.info('[Watcher] watch() called — path:', watchPath, 'type:', type, 'isUncPath:', isUncPath, 'usePolling:', usePolling)
     const id = getUniqueId()
 
     const watcher = chokidar.watch(watchPath, {
@@ -315,6 +323,9 @@ class Watcher {
             }
           }, 150)
         }
+      })
+      .on('ready', () => {
+        log.info('[Watcher] Initial scan complete for:', watchPath)
       })
       .on('error', (error: unknown) => {
         const code = (error as NodeJS.ErrnoException)?.code
