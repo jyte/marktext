@@ -196,8 +196,17 @@ class Watcher {
 
   watch(win: BrowserWindow, watchPath: string, type: WatchType = 'dir'): () => void {
     const usePolling = isOsx ? true : this._preferences.getItem<boolean>('watcherUsePolling')
+    return this._startWatcher(win, watchPath, type, usePolling)
+  }
 
+  private _startWatcher(
+    win: BrowserWindow,
+    watchPath: string,
+    type: WatchType,
+    usePolling: boolean
+  ): () => void {
     const id = getUniqueId()
+    const { _preferences } = this
 
     const watcher = chokidar.watch(watchPath, {
       ignored: (pathname: string, fileInfo?: { isDirectory: () => boolean }) => {
@@ -212,7 +221,7 @@ class Watcher {
         if (
           checkPathExcludePattern(
             pathname,
-            this._preferences.getItem<readonly string[]>('treePathExcludePatterns')
+            _preferences.getItem<readonly string[]>('treePathExcludePatterns')
           )
         ) {
           return true
@@ -333,6 +342,8 @@ class Watcher {
       })
 
     const closeFn = (): void => {
+      // Guard: exit early if the entry was already replaced by a fallback restart
+      if (!this.watchers[id]) return
       disposed = true
       if (this.watchers[id]) {
         delete this.watchers[id]
@@ -352,7 +363,86 @@ class Watcher {
       close: closeFn
     }
 
+    // Fallback: when native file watching silently fails (e.g., SSHFS on Windows,
+    // SMB/CIFS network shares, or remote filesystems that don't support
+    // ReadDirectoryChangesW), switch to polling. Chokidar's initial scan won't
+    // emit any events if the underlying platform doesn't support native watching.
+    if (type === 'dir' && !usePolling) {
+      this._addFallbackDetection(win, watchPath, type, id, watcher)
+    }
+
     return closeFn
+  }
+
+  /**
+   * Detect when chokidar's native watching fails to emit initial events for a
+   * non-empty directory, and restart the watcher with polling enabled.
+   *
+   * This handles SSHFS/WinFsp, SMB/CIFS network shares, and other filesystems
+   * that don't support the native filesystem notification API on Windows.
+   */
+  private _addFallbackDetection(
+    win: BrowserWindow,
+    watchPath: string,
+    type: WatchType,
+    id: string,
+    watcher: FSWatcher
+  ): void {
+    let initialEventCount = 0
+    let fallbackTriggered = false
+
+    const onAnyEvent = (): void => { initialEventCount++ }
+
+    watcher.on('add', onAnyEvent)
+    watcher.on('addDir', onAnyEvent)
+
+    const attemptFallback = async(): Promise<void> => {
+      if (fallbackTriggered) return
+      if (initialEventCount > 0) return
+
+      const entry = this.watchers[id]
+      if (!entry || entry.watcher !== watcher) return
+
+      fallbackTriggered = true
+
+      try {
+        const entries = await fsPromises.readdir(watchPath, { withFileTypes: true })
+        const hasWatchableContent = entries.some(e =>
+          e.isDirectory() || hasMarkdownExtension(e.name)
+        )
+        if (!hasWatchableContent) return
+
+        log.warn(
+          `[Watcher] No initial events for non-empty directory "${watchPath}". ` +
+          'Native file watching may not be supported on this filesystem. ' +
+          'Restarting watcher with polling.'
+        )
+
+        watcher.close()
+        delete this.watchers[id]
+
+        this._startWatcher(win, watchPath, type, true)
+      } catch (err) {
+        log.error(`[Watcher] Failed to read directory "${watchPath}":`, err)
+      }
+    }
+
+    // Listen on 'ready' for the normal case
+    watcher.on('ready', attemptFallback)
+
+    // Safety timeout: if chokidar's 'ready' event never fires (e.g., because
+    // awaitWriteFinish / fs.stat hangs on slow or unusual filesystems), we
+    // still attempt the fallback after a generous timeout.
+    const safetyTimer = setTimeout(() => {
+      attemptFallback()
+    }, 15000)
+
+    // Clean up the timer if the watcher is closed before the timeout fires
+    const origClose = this.watchers[id].close
+    this.watchers[id].close = (): void => {
+      clearTimeout(safetyTimer)
+      origClose()
+    }
   }
 
   unwatch(win: BrowserWindow, watchPath: string, type: WatchType = 'dir'): void {
