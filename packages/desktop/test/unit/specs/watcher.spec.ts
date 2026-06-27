@@ -150,8 +150,6 @@ describe('Watcher fallback detection', () => {
     // Emit ready — fallback should NOT trigger since we had events
     mockW.emitter.emit('ready')
 
-    // Safety timer should have been cleared; advance past 15s
-    vi.advanceTimersByTime(16000)
     await Promise.resolve()
 
     expect(chokidarWatchMock).toHaveBeenCalledTimes(1)
@@ -223,55 +221,6 @@ describe('Watcher fallback detection', () => {
     await Promise.resolve()
 
     expect(mockReaddir).toHaveBeenCalled()
-    expect(mockW.close).not.toHaveBeenCalled()
-    expect(chokidarWatchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('safety timeout triggers fallback when ready never fires', async() => {
-    const { default: WatcherClass } = await loadWatcher()
-    const prefs = createMockPreferences()
-    const win = createMockBrowserWindow()
-    const watcher = new WatcherClass(prefs as never)
-
-    mockReaddir.mockResolvedValue([
-      { name: 'doc.md', isDirectory: () => false }
-    ])
-
-    watcher.watch(win as never, '/slow/dir', 'dir')
-    const mockW = watchers[0]
-
-    // Never emit 'ready' — advance past the 15s safety timeout
-    vi.advanceTimersByTime(15001)
-    await vi.runAllTimersAsync()
-    await Promise.resolve()
-
-    expect(mockReaddir).toHaveBeenCalledWith('/slow/dir', { withFileTypes: true })
-    expect(mockW.close).toHaveBeenCalled()
-    expect(chokidarWatchMock).toHaveBeenCalledTimes(2)
-  })
-
-  it('safety timeout does NOT trigger fallback after events were already received', async() => {
-    const { default: WatcherClass } = await loadWatcher()
-    const prefs = createMockPreferences()
-    const win = createMockBrowserWindow()
-    const watcher = new WatcherClass(prefs as never)
-
-    mockReaddir.mockResolvedValue([
-      { name: 'doc.md', isDirectory: () => false }
-    ])
-
-    watcher.watch(win as never, '/working/dir', 'dir')
-    const mockW = watchers[0]
-
-    // Emit events before the safety timeout fires
-    mockW.emitter.emit('addDir', '/working/dir/sub')
-    mockW.emitter.emit('add', '/working/dir/doc.md')
-
-    vi.advanceTimersByTime(15001)
-    await vi.runAllTimersAsync()
-    await Promise.resolve()
-
-    // Fallback should not trigger because we had events
     expect(mockW.close).not.toHaveBeenCalled()
     expect(chokidarWatchMock).toHaveBeenCalledTimes(1)
   })

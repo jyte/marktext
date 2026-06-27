@@ -238,10 +238,14 @@ class Watcher {
       depth: type === 'file' ? (isOsx ? 1 : 0) : undefined,
 
       // Please see GH#1043
-      awaitWriteFinish: {
+      // Only wait for write stability on single-file watches; for directory
+      // watches it delays the `ready` event unnecessarily and can hang on
+      // slow / virtual filesystems (SSHFS, WSL 9P) where fs.stat never
+      // stabilises.
+      awaitWriteFinish: type === 'file' ? {
         stabilityThreshold: WATCHER_STABILITY_THRESHOLD,
         pollInterval: WATCHER_STABILITY_POLL_INTERVAL
-      },
+      } : undefined,
 
       usePolling
       // chokidar's `ignored` callback signature varies between versions; this options
@@ -427,22 +431,9 @@ class Watcher {
       }
     }
 
-    // Listen on 'ready' for the normal case
+    // Listen on 'ready' — without awaitWriteFinish blocking the scan this
+    // fires sub-second even on slow filesystems, so no safety timeout needed.
     watcher.on('ready', attemptFallback)
-
-    // Safety timeout: if chokidar's 'ready' event never fires (e.g., because
-    // awaitWriteFinish / fs.stat hangs on slow or unusual filesystems), we
-    // still attempt the fallback after a generous timeout.
-    const safetyTimer = setTimeout(() => {
-      attemptFallback()
-    }, 15000)
-
-    // Clean up the timer if the watcher is closed before the timeout fires
-    const origClose = this.watchers[id].close
-    this.watchers[id].close = (): void => {
-      clearTimeout(safetyTimer)
-      origClose()
-    }
   }
 
   unwatch(win: BrowserWindow, watchPath: string, type: WatchType = 'dir'): void {
