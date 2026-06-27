@@ -5,15 +5,16 @@ import { SpellChecker } from '@/spellchecker'
 import { getLanguageName } from '@/spellchecker/languageMap'
 import getCommandDescriptionById from './descriptions'
 import { t } from '../i18n'
+import { usePreferencesStore } from '@/store/preferences'
+import type { PreferencesState } from '@/store/preferences'
 
 interface SpellcheckerSubcommand {
   id: string
-  // getLanguageName() can return null for unknown locales.
   description: string | null
   value: string
 }
 
-// Command to switch the spellchecker language
+// Command to switch the spellchecker language(s)
 class SpellcheckerLanguageCommand {
   id: string
   description: string
@@ -39,37 +40,60 @@ class SpellcheckerLanguageCommand {
     const langs = await SpellChecker.getAvailableDictionaries()
 
     const finalLangs: string[] = langs.length > 0 ? langs : ['en-US']
+    const active = this.spellchecker.lang
 
     this.subcommands = finalLangs.map((lang) => {
+      const isActive = active.includes(lang)
       return {
         id: `spellchecker.switch-language-id-${lang}`,
-        description: getLanguageName(lang),
+        description: getLanguageName(lang)
+          ? `${isActive ? '✓ ' : '  '}${getLanguageName(lang)}`
+          : `${isActive ? '✓ ' : '  '}${lang}`,
         value: lang
       }
     })
-    const currentLanguage = this.spellchecker.lang
-    this.subcommandSelectedIndex = this.subcommands.findIndex(
-      (cmd) => cmd.value === currentLanguage
-    )
+    // Don't preselect any index (multi-select toggles)
+    this.subcommandSelectedIndex = -1
   }
 
   execute = async(): Promise<void> => {
-    // Timeout to hide the command palette and then show again to prevent issues.
     await delay(100)
     bus.emit('show-command-palette', this)
   }
 
   executeSubcommand = async(id: string): Promise<void> => {
     const command = this.subcommands.find((cmd) => cmd.id === id)
-    if (this.spellchecker.isEnabled) {
-      bus.emit('switch-spellchecker-language', command?.value)
-    } else {
+    if (!command) return
+
+    if (!this.spellchecker.isEnabled) {
       notice.notify({
         title: 'Spelling',
         type: 'warning',
         message: 'Cannot change language because spellchecker is disabled.'
       })
+      return
     }
+
+    const current = [...this.spellchecker.lang]
+    const idx = current.indexOf(command.value)
+
+    if (idx >= 0) {
+      // Remove if already active (toggle off)
+      current.splice(idx, 1)
+    } else {
+      // Add if not active (toggle on)
+      current.push(command.value)
+    }
+
+    // If nothing selected, fall back to en-US
+    const updated = current.length > 0 ? current : ['en-US']
+
+    // Update store
+    const store = usePreferencesStore()
+    store.SET_SINGLE_PREFERENCE({ type: 'spellcheckerLanguages' as keyof PreferencesState, value: updated })
+
+    // Apply to spell checker
+    await this.spellchecker.setLanguages(updated)
   }
 
   unload = (): void => {

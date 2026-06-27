@@ -23,14 +23,20 @@
           :disable="true"
           :on-change="noop"
         />
-        <cur-select
+        <div
           v-show="!isOsx"
-          :description="t('preferences.spellchecker.defaultLanguage')"
-          :value="spellcheckerLanguage"
-          :options="availableDictionaries"
-          :disable="!spellcheckerEnabled"
-          :on-change="handleSpellcheckerLanguage"
-        />
+          class="transfer-wrapper"
+        >
+          <div class="description">
+            {{ t('preferences.spellchecker.defaultLanguage') }}
+          </div>
+          <el-transfer
+            v-model="activeLanguages"
+            :data="availableTransferData"
+            :disabled="!spellcheckerEnabled"
+            @change="handleSpellcheckerLanguages"
+          />
+        </div>
       </template>
     </compound>
 
@@ -89,7 +95,6 @@ import type { PreferencesState } from '@/store/preferences'
 import { ref, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import Compound from '../common/compound/index.vue'
-import CurSelect from '../common/select/index.vue'
 import Bool from '../common/bool/index.vue'
 import { isOsx as checkIsOsx } from '@/util'
 import { SpellChecker } from '@/spellchecker'
@@ -97,7 +102,6 @@ import { getLanguageName } from '@/spellchecker/languageMap'
 import notice from '@/services/notification'
 import { useI18n } from 'vue-i18n'
 import { Delete } from '@element-plus/icons-vue'
-import type { PrefSelectOption } from '../common/types'
 
 interface CustomDictionaryWord {
   word: string
@@ -105,12 +109,13 @@ interface CustomDictionaryWord {
 
 const { t } = useI18n()
 const isOsx = checkIsOsx
-const availableDictionaries = ref<PrefSelectOption<string>[]>([])
+const availableTransferData = ref<{ key: string; label: string }[]>([])
+const activeLanguages = ref<string[]>([])
 const wordsInCustomDictionary = ref<CustomDictionaryWord[]>([])
 
 const preferenceStore = usePreferencesStore()
 
-const { spellcheckerEnabled, spellcheckerNoUnderline, spellcheckerLanguage } =
+const { spellcheckerEnabled, spellcheckerNoUnderline, spellcheckerLanguages } =
   storeToRefs(preferenceStore)
 
 onMounted(async () => {
@@ -118,7 +123,19 @@ onMounted(async () => {
     return
   }
 
-  availableDictionaries.value = await getAvailableDictionaries()
+  const dictionaries = await SpellChecker.getAvailableDictionaries()
+
+  availableTransferData.value = dictionaries.map((code) => ({
+    key: code,
+    label: getLanguageName(code) ?? code
+  }))
+
+  // Initialize transfer with current value; fall back to old single-language
+  // preference for users who haven't migrated yet.
+  const current = spellcheckerLanguages.value
+  activeLanguages.value = Array.isArray(current) && current.length > 0
+    ? [...current]
+    : ['en-US']
 
   window.electron.ipcRenderer
     .invoke('mt::spellchecker-get-custom-dictionary-words')
@@ -129,24 +146,14 @@ onMounted(async () => {
     })
 })
 
-const getAvailableDictionaries = async (): Promise<PrefSelectOption<string>[]> => {
-  const dictionaries = await SpellChecker.getAvailableDictionaries()
-
-  return dictionaries.map((selectedItem) => {
-    return {
-      value: selectedItem,
-      label: getLanguageName(selectedItem) ?? selectedItem
-    }
-  })
-}
-
-const handleSpellcheckerLanguage = async (languageCode: string | number | boolean): Promise<void> => {
-  onSelectChange('spellcheckerLanguage', languageCode)
-
-  await window.electron.ipcRenderer.invoke(
-    'mt::spellchecker-switch-language',
-    String(languageCode)
-  )
+const handleSpellcheckerLanguages = async (
+  _value: string[],
+  _direction: 'left' | 'right',
+  _movedKeys: string[]
+): Promise<void> => {
+  const langs = activeLanguages.value
+  onSelectChange('spellcheckerLanguages', langs)
+  await window.electron.ipcRenderer.invoke('mt::spellchecker-switch-language', langs)
 }
 
 const handleSpellcheckerEnabled = (isEnabled: boolean): void => {
@@ -195,6 +202,9 @@ const handleDeleteClick = (selectedItem: CustomDictionaryWord): void => {
     color: var(--editorColor);
     font-size: 14px;
   }
+}
+.transfer-wrapper {
+  margin: 12px 0;
 }
 .el-table,
 .el-table__expanded-cell {
@@ -275,5 +285,40 @@ li.el-select-dropdown__item:hover {
 .pref-spellchecker .el-input__icon,
 .pref-spellchecker .el-input__inner {
   line-height: 30px;
+}
+.pref-spellchecker .el-transfer {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+}
+.pref-spellchecker .el-transfer-panel {
+  width: 220px;
+  background: var(--editorBgColor);
+  border-color: var(--editorColor10);
+}
+.pref-spellchecker .el-transfer-panel__header {
+  background: var(--editorBgColor);
+  color: var(--editorColor);
+  border-color: var(--editorColor10);
+}
+.pref-spellchecker .el-transfer-panel__body {
+  background: var(--editorBgColor);
+}
+.pref-spellchecker .el-transfer-panel__item {
+  color: var(--editorColor);
+}
+.pref-spellchecker .el-transfer-panel__item.is-checked {
+  color: var(--themeColor);
+}
+.pref-spellchecker .el-transfer__button {
+  background: var(--themeColor);
+  border-color: var(--themeColor);
+}
+.pref-spellchecker .el-transfer__button:hover {
+  background: var(--themeColor);
+  opacity: 0.85;
+}
+.pref-spellchecker .el-transfer-panel__filter .el-input__inner {
+  height: 28px;
 }
 </style>

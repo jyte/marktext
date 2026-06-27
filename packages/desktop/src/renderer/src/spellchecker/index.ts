@@ -5,12 +5,12 @@ import { isOsx } from '@/util'
  */
 export class SpellChecker {
   enabled: boolean
-  currentSpellcheckerLanguage: string
+  currentSpellcheckerLanguages: string[]
   isProviderAvailable: boolean
 
-  constructor(enabled = true, lang = '') {
+  constructor(enabled = true, langs: string[] = []) {
     this.enabled = enabled
-    this.currentSpellcheckerLanguage = lang
+    this.currentSpellcheckerLanguages = langs
 
     // Helper to forbid the usage of the spell checker (e.g. failed to create
     // native spell checker), even if spell checker is enabled in settings.
@@ -25,9 +25,9 @@ export class SpellChecker {
   }
 
   /**
-   * Enable the spell checker and sets `lang` or tries to find a fallback.
+   * Enable the spell checker and sets `langs` or tries to find a fallback.
    */
-  async activateSpellchecker(lang?: string): Promise<boolean> {
+  async activateSpellchecker(langs?: string[]): Promise<boolean> {
     try {
       this.enabled = true
       this.isProviderAvailable = true
@@ -36,7 +36,7 @@ export class SpellChecker {
         await window.electron.ipcRenderer.invoke('mt::spellchecker-set-enabled', true)
         return true
       }
-      return await this.switchLanguage(lang || this.currentSpellcheckerLanguage)
+      return await this.setLanguages(langs || this.currentSpellcheckerLanguages)
     } catch (error) {
       this.deactivateSpellchecker()
       throw error
@@ -53,33 +53,33 @@ export class SpellChecker {
   }
 
   /**
-   * Return the current language.
+   * Return the current languages.
    */
-  get lang(): string {
+  get lang(): string[] {
     if (this.isEnabled) {
-      return this.currentSpellcheckerLanguage
+      return this.currentSpellcheckerLanguages
     }
-    return ''
+    return []
   }
 
-  set lang(lang: string) {
-    this.currentSpellcheckerLanguage = lang
+  set lang(langs: string[]) {
+    this.currentSpellcheckerLanguages = langs
   }
 
   /**
-   * Explicitly switch the language to a specific language.
+   * Explicitly switch the spell checker to specific language(s).
    *
    * NOTE: This function can throw an exception.
    */
-  async switchLanguage(lang: string): Promise<boolean> {
+  async setLanguages(langs: string[]): Promise<boolean> {
     if (isOsx) {
       // NB: macOS uses the OS spell checker and detects language automatically.
       return true
-    } else if (!lang) {
-      throw new Error('Expected non-empty language for spell checker.')
+    } else if (!langs || langs.length === 0) {
+      throw new Error('Expected at least one language for spell checker.')
     } else if (this.isEnabled) {
-      await window.electron.ipcRenderer.invoke('mt::spellchecker-switch-language', lang)
-      this.lang = lang
+      await window.electron.ipcRenderer.invoke('mt::spellchecker-switch-language', langs)
+      this.lang = langs
       return true
     }
     return false

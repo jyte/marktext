@@ -10,7 +10,7 @@ import { ensureWindowPosition, zoomIn, zoomOut } from './utils'
 import { TITLE_BAR_HEIGHT, editorWinOptions, isLinux, isOsx } from '../config'
 import { showEditorContextMenu } from '../contextMenu/editor'
 import { loadMarkdownFile } from '../filesystem/markdown'
-import { switchLanguage } from '../spellchecker'
+import { setLanguages } from '../spellchecker'
 import fs from 'fs'
 
 type RawMarkdownDocument = Awaited<ReturnType<typeof loadMarkdownFile>>
@@ -116,7 +116,8 @@ class EditorWindow extends BaseWindow {
       tabBarVisibility,
       sourceCodeModeEnabled,
       spellcheckerEnabled,
-      spellcheckerLanguage
+      spellcheckerLanguage,
+      spellcheckerLanguages
     } = preferences.getAll()
     const resolvedSideBarVisibility = restoreLayoutState ? !!sideBarVisibility : false
 
@@ -148,7 +149,10 @@ class EditorWindow extends BaseWindow {
 
     if (spellcheckerEnabled && !isOsx) {
       try {
-        switchLanguage(win, spellcheckerLanguage as string)
+        const langs = (Array.isArray(spellcheckerLanguages) && spellcheckerLanguages.length > 0)
+          ? spellcheckerLanguages
+          : [spellcheckerLanguage as string || 'en-US']
+        setLanguages(win, langs as string[])
       } catch (error) {
         log.error('Unable to set spell checker language on startup:', error)
       }

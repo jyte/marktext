@@ -92,7 +92,7 @@ export interface PreferencesState {
   // ----- Spellchecker -----
   spellcheckerEnabled: boolean
   spellcheckerNoUnderline: boolean
-  spellcheckerLanguage: string
+  spellcheckerLanguages: string[]
 
   // ----- Side bar / tab bar visibility (persisted) -----
   sideBarVisibility: boolean
@@ -207,6 +207,7 @@ export const usePreferencesStore = defineStore('preferences', {
     spellcheckerEnabled: false,
     spellcheckerNoUnderline: false,
     spellcheckerLanguage: 'en-US',
+    spellcheckerLanguages: ['en-US'],
 
     // Default values that are overwritten with the entries below.
     sideBarVisibility: false,

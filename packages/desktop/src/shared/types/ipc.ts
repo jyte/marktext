@@ -76,7 +76,7 @@ export interface IpcInvokeChannels {
   'mt::spellchecker-get-custom-dictionary-words': { args: []; ret: string[] }
   'mt::spellchecker-remove-word': { args: [word: string]; ret: boolean }
   'mt::spellchecker-set-enabled': { args: [enabled: boolean]; ret: void }
-  'mt::spellchecker-switch-language': { args: [language: string]; ret: void }
+  'mt::spellchecker-switch-language': { args: [languages: string[]]; ret: void }
   'mt::uploader::upload': { args: [req: unknown]; ret: unknown }
   'mt::win::is-fullscreen': { args: []; ret: boolean }
   'mt::win::is-maximized': { args: []; ret: boolean }

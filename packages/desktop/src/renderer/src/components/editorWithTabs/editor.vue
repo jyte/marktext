@@ -250,7 +250,7 @@ const {
   hideScrollbar,
   spellcheckerEnabled,
   spellcheckerNoUnderline,
-  spellcheckerLanguage,
+  spellcheckerLanguages,
   language,
 
   // Edit modes
@@ -756,7 +756,7 @@ watch(spellcheckerEnabled, (value, oldValue) => {
 
     // Disable native spell checker
     if (value) {
-      spellchecker.activateSpellchecker(spellcheckerLanguage.value)
+      spellchecker.activateSpellchecker(spellcheckerLanguages.value)
     } else {
       spellchecker.deactivateSpellchecker()
     }
@@ -771,7 +771,7 @@ watch(spellcheckerNoUnderline, (value, oldValue) => {
   }
 })
 
-watch(spellcheckerLanguage, (value, oldValue) => {
+watch(spellcheckerLanguages, (value, oldValue) => {
   if (value !== oldValue) {
     spellchecker.lang = value
   }
@@ -980,7 +980,7 @@ const setImageViewerVisible = (status: boolean) => {
   }
 }
 
-const switchSpellcheckLanguage = (languageCode: unknown) => {
+const switchSpellcheckLanguage = (languages: unknown) => {
   const { isEnabled } = spellchecker
 
   // This method is also called from bus, so validate state before continuing.
@@ -988,21 +988,21 @@ const switchSpellcheckLanguage = (languageCode: unknown) => {
     throw new Error(t('editor.spellcheck.disabledError'))
   }
 
+  // Accept both a single language code (legacy) and an array of codes.
+  const langs: string[] = Array.isArray(languages) ? languages : [String(languages)]
+  const label = langs.join(', ')
+
   spellchecker
-    .switchLanguage(languageCode)
-    .then((langCode: string | null | undefined) => {
-      if (!langCode) {
-        // Unable to switch language due to missing dictionary. The spell checker is now in an invalid state.
-        notice.notify({
-          title: t('editor.spellcheck.title'),
-          type: 'warning',
-          message: t('editor.spellcheck.languageMissing', { languageCode: languageCode as string })
-        })
+    .setLanguages(langs)
+    .then((success: boolean) => {
+      if (success) {
+        const store = usePreferencesStore()
+        store.SET_SINGLE_PREFERENCE({ type: 'spellcheckerLanguages', value: langs })
       }
     })
     .catch((error: unknown) => {
       log.error(
-        t('editor.spellcheck.errorSwitchingLanguage', { languageCode: languageCode as string })
+        t('editor.spellcheck.errorSwitchingLanguage', { languageCode: label })
       )
       log.error(error)
 
@@ -1011,7 +1011,7 @@ const switchSpellcheckLanguage = (languageCode: unknown) => {
         title: t('editor.spellcheck.title'),
         type: 'error',
         message: t('editor.spellcheck.switchError', {
-          languageCode: languageCode as string,
+          languageCode: label,
           error: errMsg
         })
       })
@@ -1761,7 +1761,7 @@ onMounted(() => {
   bus.on('language-changed', handleLanguageChanged)
 
   // Create spell check wrapper and enable spell checking if preferred.
-  spellchecker = new SpellChecker(spellcheckerEnabled.value, spellcheckerLanguage.value)
+  spellchecker = new SpellChecker(spellcheckerEnabled.value, spellcheckerLanguages.value)
 
   // Register command palette entry for switching spellchecker language.
   switchLanguageCommand = new SpellcheckerLanguageCommand(spellchecker)

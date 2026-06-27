@@ -50,6 +50,12 @@ class Preference extends TypedEmitter<PreferenceEvents> {
           if (store.get('startUpAction') === 'lastState') {
             store.set('startUpAction', 'openLastFolder')
           }
+        },
+        '0.20.0': (store) => {
+          const oldLang = store.get('spellcheckerLanguage')
+          if (typeof oldLang === 'string') {
+            store.set('spellcheckerLanguages', [oldLang])
+          }
         }
       },
       beforeEachMigration: (_store, context) => {

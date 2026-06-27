@@ -32,10 +32,10 @@ export const setSpellCheckerEnabled = (win: BrowserWindow, enabled: boolean): bo
 }
 
 /**
- * Switch the spellchecker to the given language and enable the builtin spell checker.
+ * Switch the spellchecker to the given language(s) and enable the builtin spell checker.
  */
-export const switchLanguage = (win: BrowserWindow, lang: string): void => {
-  win.webContents.session.setSpellCheckerLanguages([lang])
+export const setLanguages = (win: BrowserWindow, langs: string[]): void => {
+  win.webContents.session.setSpellCheckerLanguages(langs)
 }
 
 /**
@@ -61,9 +61,9 @@ const registerSpellcheckerHandlers = (): void => {
     if (!win) return false
     return removeFromDictionary(win, word)
   })
-  ipcMain.handle('mt::spellchecker-switch-language', async(e, lang: string) => {
+  ipcMain.handle('mt::spellchecker-switch-language', async(e, langs: string[]) => {
     const win = BrowserWindow.fromWebContents(e.sender)
-    if (win) switchLanguage(win, lang)
+    if (win) setLanguages(win, langs)
     return null
   })
   ipcMain.handle('mt::spellchecker-get-available-dictionaries', async(e) => {

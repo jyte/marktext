@@ -329,10 +329,16 @@
     "default": false
   },
   "spellcheckerLanguage": {
-    "description": "Spelling--The spell checker language",
+    "description": "Spelling--The spell checker language (deprecated, use spellcheckerLanguages)",
     "type": "string",
     "pattern": "^[a-z]{2,3}(?:[-](?:[0-9]|[a-zA-Z]){2,}){0,2}$",
     "default": "en-US"
+  },
+  "spellcheckerLanguages": {
+    "description": "Spelling--The spell checker languages (multi-select)",
+    "type": "array",
+    "items": { "type": "string" },
+    "default": ["en-US"]
   },
   "imageInsertAction": {
     "description": "Image--The default behavior after insert image from local folder",
