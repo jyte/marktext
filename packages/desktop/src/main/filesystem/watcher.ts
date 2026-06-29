@@ -6,7 +6,7 @@ import { exists } from 'common/filesystem'
 import { hasMarkdownExtension, checkPathExcludePattern } from 'common/filesystem/paths'
 import { getUniqueId } from '../utils'
 import { loadMarkdownFile } from '../filesystem/markdown'
-import { isLinux, isOsx } from '../config'
+import { isLinux, isOsx, isWindows } from '../config'
 import type { BrowserWindow } from 'electron'
 import type { LineEnding } from '@shared/types/files'
 import type Preference from '../preferences'
@@ -400,9 +400,9 @@ class Watcher {
     watcher.on('add', onAnyEvent)
     watcher.on('addDir', onAnyEvent)
 
-    const attemptFallback = async(): Promise<void> => {
+    const attemptFallback = async(force = false): Promise<void> => {
       if (fallbackTriggered) return
-      if (initialEventCount > 0) return
+      if (!force && initialEventCount > 0) return
 
       const entry = this.watchers[id]
       if (!entry || entry.watcher !== watcher) return
@@ -433,7 +433,16 @@ class Watcher {
 
     // Listen on 'ready' — without awaitWriteFinish blocking the scan this
     // fires sub-second even on slow filesystems, so no safety timeout needed.
-    watcher.on('ready', attemptFallback)
+    watcher.on('ready', () => attemptFallback(false))
+
+    // On Windows, chokidar's native watcher may emit UNKNOWN errors on FUSE
+    // mounts (SSHFS/WinFsp, WSL 9P) — fall back to polling regardless of
+    // whether an initial addDir event was already emitted.
+    watcher.on('error', (error: unknown) => {
+      if (isWindows && (error as NodeJS.ErrnoException)?.code === 'UNKNOWN') {
+        attemptFallback(true)
+      }
+    })
   }
 
   unwatch(win: BrowserWindow, watchPath: string, type: WatchType = 'dir'): void {
