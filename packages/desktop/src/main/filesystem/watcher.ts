@@ -1,4 +1,5 @@
 import path from 'path'
+import fs, { type Dirent } from 'fs'
 import fsPromises from 'fs/promises'
 import log from 'electron-log'
 import chokidar, { type FSWatcher } from 'chokidar'
@@ -16,6 +17,22 @@ import type Preference from '../preferences'
 export const WATCHER_STABILITY_THRESHOLD = 1000
 export const WATCHER_STABILITY_POLL_INTERVAL = 150
 
+/**
+ * How often (in ms) to poll the directory tree when using the UNC fallback.
+ *
+ * chokidar / fs.watch cannot watch Windows UNC paths (\\server\share, \\wsl.localhost\…)
+ * because virtual filesystems such as WSL2's 9P protocol do not support
+ * ReadDirectoryChangesW or inotify.  The same limitation applies to SSHFS mounts,
+ * network drives, and Docker-mounted volumes that use FUSE or VirtioFS.
+ *
+ * Other projects that have hit this:
+ *   - VS Code  ships its own FileWatcher with a polling fallback for UNC paths.
+ *   - Cypress  forces CHOKIDAR_USEPOLLING=1 for WSL.
+ *   - Angular  recommends polling or moving sources out of the 9P mount.
+ *   - Vite     exposes server.watch.usePolling for the same reason.
+ */
+const UNC_POLL_INTERVAL = 3000
+
 const EVENT_NAME = {
   dir: 'mt::update-object-tree' as const,
   file: 'mt::update-file' as const
@@ -32,7 +49,7 @@ interface IgnoreEntry {
 
 interface WatcherEntry {
   win: BrowserWindow
-  watcher: FSWatcher
+  watcher: FSWatcher | { close: () => void }
   pathname: string
   type: WatchType
   close: () => void
@@ -195,6 +212,28 @@ class Watcher {
   }
 
   watch(win: BrowserWindow, watchPath: string, type: WatchType = 'dir'): () => void {
+    // Windows UNC paths (\\server\share, \\wsl.localhost\…) cannot be watched by
+    // chokidar/fs.watch because virtual filesystems (WSL2 9P, SSHFS, network drives)
+    // do not support ReadDirectoryChangesW or inotify.  We fall back to a manual
+    // readdir-based poll loop — see UNC_POLL_INTERVAL for details.
+    const needsPolling = isWindows && (
+      /^[/\\]{2}/.test(watchPath) ||
+      (() => {
+        try {
+          fs.realpathSync.native(watchPath)
+          return false
+        } catch {
+          return true
+        }
+      })()
+    )
+    if (needsPolling) {
+      if (type === 'file') {
+        return this._watchUncFile(win, watchPath)
+      }
+      return this._startUncPolling(win, watchPath, type)
+    }
+
     const usePolling = isOsx ? true : this._preferences.getItem<boolean>('watcherUsePolling')
     return this._startWatcher(win, watchPath, type, usePolling)
   }
@@ -425,7 +464,7 @@ class Watcher {
         watcher.close()
         delete this.watchers[id]
 
-        this._startWatcher(win, watchPath, type, true)
+        this._startUncPolling(win, watchPath, type)
       } catch (err) {
         log.error(`[Watcher] Failed to read directory "${watchPath}":`, err)
       }
@@ -445,6 +484,203 @@ class Watcher {
     })
   }
 
+  /**
+   * Polling-based file-tree scanner for Windows UNC paths / FUSE mounts.
+   *
+   * chokidar relies on fs.watch / ReadDirectoryChangesW under the hood, which
+   * does not work on virtual filesystems such as WSL2's 9P server, SSHFS mounts,
+   * or mapped network drives (see Node.js#37960, chokidar#1206, chokidar#1376).
+   *
+   * This method bypasses chokidar entirely: it runs a recursive readdir scan on
+   * every tick and emits add / addDir / unlink / unlinkDir events to the renderer
+   * in the same format that chokidar would use.  The renderer's tree controller
+   * treats them identically, so the rest of the UI is unaffected.
+   *
+   * The same strategy (manual polling for UNC / virtual FS roots) is used by
+   * VS Code, Cypress, Angular CLI, and Vite — none of which can rely on the
+   * OS-native watcher across those mount boundaries.
+   */
+  private _watchUncFile(win: BrowserWindow, watchPath: string): () => void {
+    log.info('[Watcher] Starting UNC file polling for:', watchPath)
+
+    const id = getUniqueId()
+    let disposed = false
+
+    const handler = async (): Promise<void> => {
+      if (disposed) return
+
+      const isMarkdown = hasMarkdownExtension(watchPath)
+      if (isMarkdown) {
+        const { _preferences } = this
+        const eol = _preferences.getPreferredEol() as LineEnding
+        const {
+          autoGuessEncoding = true,
+          trimTrailingNewline = 2,
+          autoNormalizeLineEndings = false
+        } = _preferences.getAll()
+
+        // Simulate the same work chokidar would do on a "change" event.
+        try {
+          const [data, stats] = await Promise.all([
+            loadMarkdownFile(watchPath, eol, autoGuessEncoding, trimTrailingNewline, autoNormalizeLineEndings),
+            fsPromises.stat(watchPath)
+          ])
+          win.webContents.send('mt::update-file', {
+            type: 'change',
+            change: { pathname: watchPath, data, mtimeMs: stats.mtimeMs }
+          })
+        } catch {
+          // File may have been removed — send unlink.
+          win.webContents.send('mt::update-file', {
+            type: 'unlink',
+            change: { pathname: watchPath }
+          })
+        }
+      }
+    }
+
+    // Periodically stat the file — same as chokidar's polling path would do.
+    fs.watchFile(watchPath, { interval: UNC_POLL_INTERVAL }, () => {
+      handler().catch(err => log.error('[Watcher] UNC file poll error:', err))
+    })
+
+    const closeFn = (): void => {
+      disposed = true
+      fs.unwatchFile(watchPath)
+      if (this.watchers[id]) {
+        delete this.watchers[id]
+      }
+    }
+
+    this.watchers[id] = {
+      win,
+      watcher: { close: closeFn },
+      pathname: watchPath,
+      type: 'file',
+      close: closeFn
+    }
+
+    return closeFn
+  }
+
+  private _startUncPolling(
+    win: BrowserWindow,
+    watchPath: string,
+    type: WatchType
+  ): () => void {
+    log.info('[Watcher] Starting UNC polling fallback for:', watchPath)
+
+    const id = getUniqueId()
+    // Map of known pathname → 'file' | 'dir' — used for change detection.
+    let known = new Map<string, 'file' | 'dir'>()
+    let disposed = false
+
+    const handler = async (): Promise<void> => {
+      if (disposed) return
+
+      const current = new Map<string, 'file' | 'dir'>()
+      await this._scanUncDirectory(watchPath, current)
+
+      // Emit additions.
+      const { _preferences } = this
+      const eol = _preferences.getPreferredEol() as LineEnding
+      const {
+        autoGuessEncoding = true,
+        trimTrailingNewline = 2,
+        autoNormalizeLineEndings = false
+      } = _preferences.getAll()
+
+      for (const [p, kind] of current) {
+        if (known.has(p)) continue
+        if (kind === 'dir') {
+          addDir(win, p, type)
+        } else {
+          await add(win, p, type, eol, autoGuessEncoding, trimTrailingNewline, autoNormalizeLineEndings)
+        }
+      }
+
+      // Emit removals.
+      for (const [p, kind] of known) {
+        if (current.has(p)) continue
+        if (kind === 'dir') {
+          unlinkDir(win, p, type)
+        } else {
+          unlink(win, p, type)
+        }
+      }
+
+      known = current
+    }
+
+    // Initial population (fire-and-forget).
+    handler().catch(err => log.error('[Watcher] UNC polling handler error:', err))
+
+    const intervalId = setInterval(() => {
+      handler().catch(err => log.error('[Watcher] UNC polling handler error:', err))
+    }, UNC_POLL_INTERVAL)
+
+    const closeFn = (): void => {
+      disposed = true
+      clearInterval(intervalId)
+      if (this.watchers[id]) {
+        delete this.watchers[id]
+      }
+    }
+
+    this.watchers[id] = {
+      win,
+      watcher: { close: closeFn },
+      pathname: watchPath,
+      type,
+      close: closeFn
+    }
+
+    return closeFn
+  }
+
+  /**
+   * Recursively walk `dirPath` with readdir ({ withFileTypes: true }) and
+   * populate `results` with every markdown file and sub-directory found.
+   *
+   * Directories whose name would be ignored by the chokidar `ignored` callback
+   * (node_modules, .asar) are skipped during the walk rather than filtered out
+   * later.
+   */
+  private async _scanUncDirectory(
+    dirPath: string,
+    results: Map<string, 'file' | 'dir'>
+  ): Promise<void> {
+    let entries: Dirent[]
+    try {
+      entries = await fsPromises.readdir(dirPath, { withFileTypes: true })
+    } catch (err) {
+      log.error('[Watcher] UNC scan — cannot read directory:', dirPath, err)
+      return
+    }
+
+    for (const entry of entries) {
+      // Skip ignored entries in the same way chokidar's `ignored` callback does.
+      if (entry.name === 'node_modules' || entry.name.endsWith('.asar')) {
+        continue
+      }
+
+      const fullPath = path.join(dirPath, entry.name)
+
+      // On WSL2's 9P virtual filesystem the Dirent type flags returned by
+      // readdir({ withFileTypes: true }) can be unreliable — isDirectory()
+      // may incorrectly return true for regular files (microsoft/WSL#13105).
+      // We therefore use the file extension as the primary signal:
+      //   - markdown extension  → always a file, regardless of Dirent
+      //   - no markdown extension → only recurse if Dirent says directory
+      if (hasMarkdownExtension(entry.name)) {
+        results.set(fullPath, 'file')
+      } else if (entry.isDirectory()) {
+        results.set(fullPath, 'dir')
+        await this._scanUncDirectory(fullPath, results)
+      }
+    }
+  }
+
   unwatch(win: BrowserWindow, watchPath: string, type: WatchType = 'dir'): void {
     for (const id of Object.keys(this.watchers)) {
       const w = this.watchers[id]
@@ -457,7 +693,7 @@ class Watcher {
   }
 
   unwatchByWindowId(windowId: number): void {
-    const watchers: FSWatcher[] = []
+    const watchers: (FSWatcher | { close: () => void })[] = []
     const watchIds: string[] = []
     for (const id of Object.keys(this.watchers)) {
       const w = this.watchers[id]

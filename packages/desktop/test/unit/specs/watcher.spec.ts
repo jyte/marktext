@@ -175,10 +175,11 @@ describe('Watcher fallback detection', () => {
     await vi.runAllTimersAsync()
     await Promise.resolve()
 
+    // _addFallbackDetection calls readdir, then _startUncPolling also calls readdir via _scanUncDirectory
     expect(mockReaddir).toHaveBeenCalledWith('/sshfs/dir', { withFileTypes: true })
     expect(mockW.close).toHaveBeenCalled()
-    // A new watcher (polling) should have been started
-    expect(chokidarWatchMock).toHaveBeenCalledTimes(2)
+    // The fallback uses _startUncPolling (no chokidar), so only one chokidar instance
+    expect(chokidarWatchMock).toHaveBeenCalledTimes(1)
   })
 
   it('does NOT trigger fallback when directory is empty', async() => {
@@ -286,8 +287,8 @@ describe('Watcher fallback detection', () => {
     await vi.runAllTimersAsync()
     await Promise.resolve()
 
-    // Should have triggered fallback only once (native + polling = 2)
-    expect(chokidarWatchMock).toHaveBeenCalledTimes(2)
+    // Should have triggered fallback only once (native = 1, fallback uses _startUncPolling)
+    expect(chokidarWatchMock).toHaveBeenCalledTimes(1)
     expect(mockW.close).toHaveBeenCalledTimes(1)
   })
 
