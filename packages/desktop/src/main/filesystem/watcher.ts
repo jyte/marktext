@@ -216,17 +216,14 @@ class Watcher {
     // chokidar/fs.watch because virtual filesystems (WSL2 9P, SSHFS, network drives)
     // do not support ReadDirectoryChangesW or inotify.  We fall back to a manual
     // readdir-based poll loop — see UNC_POLL_INTERVAL for details.
-    const needsPolling = isWindows && (
-      /^[/\\]{2}/.test(watchPath) ||
-      (() => {
-        try {
-          fs.realpathSync.native(watchPath)
-          return false
-        } catch {
-          return true
-        }
-      })()
-    )
+    const needsPolling = isWindows && (() => {
+      try {
+        fs.realpathSync.native(watchPath)
+        return false
+      } catch {
+        return true
+      }
+    })()
     if (needsPolling) {
       if (type === 'file') {
         return this._watchUncFile(win, watchPath)
